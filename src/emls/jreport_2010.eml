@@ -1,0 +1,86 @@
+Content-Type: multipart/mixed;
+	boundary="_5f73df76-a2cb-4204-8fea-03a312d5baac_"
+Subject: to:test1 cc:test2 cco: test3
+CC: <test2@domain.devel.spamina.net>
+To: <test1@domain.devel.spamina.net>
+From: Maria Fernanda Doeyo <fdoeyo@gmail.com>
+Sender: <MicrosoftExchange329e71ec88ae4615bbc36ab6ce41109e@domain.devel.spamina.net>
+Message-ID: <f98a7f2c-367b-44c5-ad97-a71d6459ace6@journal.report.generator>
+Date: Thu, 21 Aug 2014 13:52:15 +0000
+X-MS-Journal-Report:
+X-MS-Exchange-Organization-AuthSource: srv20478.domain.devel.spamina.net
+X-MS-Exchange-Organization-AuthAs: Internal
+X-MS-Exchange-Organization-AuthMechanism: 05
+Keywords:
+MIME-Version: 1.0
+
+--_5f73df76-a2cb-4204-8fea-03a312d5baac_
+Content-Type: text/plain; charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+
+Sender: fdoeyo@gmail.com
+Subject: to:test1 cc:test2 cco: test3
+Message-Id: <CABStQ7NiPCh_SY8mHJMbS3C85=D--W5cd3AWRk-3POHo6EYiVA@mail.gmail.com>
+Recipient: test3@domain.devel.spamina.net
+
+--_5f73df76-a2cb-4204-8fea-03a312d5baac_
+Content-Type: message/rfc822
+
+Received: from mail-qc0-f170.google.com (209.85.216.170) by
+ srv20478.domain.devel.spamina.net (92.54.22.41) with Microsoft SMTP Server
+ (TLS) id 14.1.438.0; Thu, 21 Aug 2014 15:52:15 +0200
+Received: by mail-qc0-f170.google.com with SMTP id x3so9349585qcv.15
+        for <test3@domain.devel.spamina.net>; Thu, 21 Aug 2014 06:52:39 -0700
+ (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=20120113;
+        h=mime-version:date:message-id:subject:from:to:cc:content-type;
+        bh=9U4rp8W6skyUozF4FmDQU/oLAtX9zZ6pQN0cMvxhyCg=;
+        b=wL4MpD5dJnaDJ9Y1N9iDg56M1HyfzlzQ2a/yYt00oU8DsIMy6jBrvf6fSOsaSd56fT
+         EPY2ot9Lvinx2V0IyEO6O+MHVlsf/gAq+bi+ZIV7t8sQI91QkuBDvXiPM9VXxri1gwOK
+         X+uq7wVZbg8u+vpNRxwKOKcFXkO6Ce6EXbotjrb/H9Vc1haynvraiMHjQe+W7J9kIarK
+         LCnw3IgI7e5eC7FxWXj5np6NA5cN3zZjIV1j309Y5soKVbLpTd2oStVN6ryf7Mcb4IJQ
+         PbMX2W2/rldRf0DJLxHzBt6TFUEXHgC2et+b2m2nXZNRnpq8e/iWZz7c+sZFe434FrUa
+         hfEg==
+X-Received: by 10.140.93.44 with SMTP id c41mr84226610qge.106.1408629159353;
+ Thu, 21 Aug 2014 06:52:39 -0700 (PDT)
+Received: by 10.96.92.68 with HTTP; Thu, 21 Aug 2014 06:52:39 -0700 (PDT)
+Date: Thu, 21 Aug 2014 10:52:39 -0300
+Message-ID: <CABStQ7NiPCh_SY8mHJMbS3C85=D--W5cd3AWRk-3POHo6EYiVA@mail.gmail.com>
+Subject: to:test1 cc:test2 cco: test3
+From: Maria Fernanda Doeyo <fdoeyo@gmail.com>
+To: <test1@domain.devel.spamina.net>
+CC: <test2@domain.devel.spamina.net>
+Content-Type: multipart/alternative;
+	boundary="_1e5fae73-01ff-4d9a-ba8e-3b5d068f5d8f_"
+BCC: <test3@domain.devel.spamina.net>
+Return-Path: fdoeyo@gmail.com
+X-MS-Exchange-Organization-OriginalArrivalTime: 21 Aug 2014 13:52:15.6201
+ (UTC)
+X-MS-Exchange-Forest-ArrivalHubServer: SRV20478.domain.devel.spamina.net
+X-MS-Exchange-Organization-OriginalClientIPAddress: 209.85.216.170
+X-MS-Exchange-Organization-OriginalServerIPAddress: 92.54.22.41
+X-MS-Exchange-Organization-AuthSource: srv20478.domain.devel.spamina.net
+X-MS-Exchange-Organization-AuthAs: Anonymous
+X-MS-Exchange-Organization-MessageDirectionality: Incoming
+X-MS-Exchange-Organization-Cross-Premises-Headers-Processed: srv20478.domain.devel.spamina.net
+X-MS-Exchange-Organization-OriginalSize: 1608
+X-MS-Exchange-Forest-MessageScope: 00000000-0000-0000-0000-000000000000
+X-MS-Exchange-Organization-MessageScope: 00000000-0000-0000-0000-000000000000
+X-MS-Exchange-Organization-HygienePolicy: Standard
+X-MS-Exchange-Organization-Recipient-Limit-Verified: True
+MIME-Version: 1.0
+
+--_1e5fae73-01ff-4d9a-ba8e-3b5d068f5d8f_
+Content-Type: text/plain; charset="UTF-8"
+
+
+
+--_1e5fae73-01ff-4d9a-ba8e-3b5d068f5d8f_
+Content-Type: text/html; charset="UTF-8"
+
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8"><div dir="ltr"><br></div>
+
+--_1e5fae73-01ff-4d9a-ba8e-3b5d068f5d8f_--
+
+--_5f73df76-a2cb-4204-8fea-03a312d5baac_--

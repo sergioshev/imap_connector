@@ -1,0 +1,508 @@
+# vim:syntax=perl
+# Imapconnector, es una clase que maneja las operaciones que se van a ejecutar
+# sobre in servidor imap. 
+# Durante la creacion se deben proporcionar los datos para acceder al servidor
+# imap. Los cuales son servidor, puerto, usuario, clave, uso de ssl o tls.
+# Asi mismo se debe establecer la accion posterior a la revision del correo.
+# La accion puede ser.
+# 1. Borrar el correo analizado
+# 2. Marcar el correo como leido
+# 3. Marcar el correo con un flag $MDNSent o Flagged el cual indica que los
+#  mensajes no deben ser tenidos en cuenta en la proxima revision.
+#
+package Imapconnector;
+
+use Email::MIME;
+use Email::Simple;
+use Mail::IMAPClient;
+use Net::SMTP;
+
+use Data::Dumper;
+
+use warnings;
+do '<%%PERLMODULE_DIR%%>/Imapconnector.conf.pl';
+
+sub _debug_ {
+  my $self = shift;
+  my $msg = shift;
+  my $worker = $self->{connector_name};
+  if ($self->{debug}) {
+    my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst)=localtime(time);
+    my $timestamp = sprintf ("%04d-%02d-%02d %02d:%02d:%02d",
+                             $year+1900,$mon+1,$mday,$hour,$min,$sec);
+    print {$self->{debug_fh}} "$timestamp W:$worker:$msg\n";
+  }
+}
+
+sub _report_ {
+  my $self = shift;
+  my $msg = shift;
+  $self->{report_flag} = 1;
+  if ($self->{report_fh}) {
+    print {$self->{report_fh}} "$msg\n";
+  }
+}
+
+
+sub _filter_exchange_report_ {
+  my $self = shift;
+  my $message = shift;
+
+  my $header_re = '^X-MS-Journal-Report:';
+  my $bcc_re = '^Bcc: .*@.*$';
+
+  if (($message =~ /$header_re/m) and ($message =~ /$bcc_re/mi)) {
+    my $parsed = Email::MIME->new($message);
+    my @parts = $parsed->parts;
+    my $attachment = undef;
+    my @bcc_set;
+    foreach my $part (@parts) {
+      my @part_headers = @{$part->{header}->{headers}};
+      if (grep /.*message\/rfc822.*/, @part_headers ) {
+        $attachment = $part->body_raw;
+      }
+      if ( grep /.*text\/plain.*/, @part_headers) {
+        my $body = $part->body;
+        my @m = $body =~ /^Bcc: (.*)$/mgi;
+        push (@bcc_set, @m);
+      }
+    }
+    if ($attachment and scalar(@bcc_set)>0) {
+      $self->_debug_("IC exchange_report: Report detected attachment extracted".scalar(@bcc_set)." header(s) added.");
+      my $mail = Email::Simple->new($attachment);
+      $mail->header_set($CONFIG{x_header} , @bcc_set);
+      return $mail->as_string;
+    }
+  }
+  return $message;  
+}
+
+sub _filter_exchange_2010_report_ {
+  my $self = shift;
+  my $message = shift;
+  my $header_re = '^X-MS-Journal-Report:';
+  if ($message =~ /$header_re/m) {
+    my $parsed = Email::MIME->new($message);
+    my @parts = $parsed->parts;
+    my $attachment = undef;
+    my @bcc_set;
+    foreach my $part (@parts) {
+      my @part_headers = @{$part->{header}->{headers}};
+      if (grep /.*message\/rfc822.*/, @part_headers ) {
+        $attachment = $part->body_raw;
+        my $parsed_embed_message = Email::MIME->new($attachment);
+        @bcc_set = $parsed_embed_message->header("bcc");
+        if (scalar(@bcc_set) > 0 ) {
+          $self->_debug_("IC exchange_2010_report: Report detected attachment extracted ".scalar(@bcc_set)." header(s) added.");
+          my $mail = Email::Simple->new($attachment);
+          $mail->header_set("X-Spamina-Bcc" , @bcc_set);
+          return $mail->as_string;
+        }
+      }
+    }
+  } 
+  return $message;
+}
+
+
+# $user=usuario
+# $pass=password
+# $ssl=mecanismo de cifrado (tls | ssl | none)
+# $debug=niver de debug(1|2), 1 - solo conector, 2 - conector + sesion_imap
+sub new {
+  my $class = shift;
+  my $self = {
+    connector_name => shift,
+    server => shift,
+    port => shift,
+    user => shift,
+    pass => shift,
+    ssl => shift,
+    debug => $CONFIG{loglevel},
+    action => '',
+    collected_total => 0,
+    collected => {},
+    stick_to => '',
+    report_flag => 0,
+    report_filename => '',
+    archiving_domain => 'unqualified.priv'
+  };
+  
+  $self->{report_filename} = 
+    $CONFIG{tmp_report_dir}."/".
+    $CONFIG{tmp_report_file_prefix}.$$."_".$self->{connector_name};
+
+  open($self->{report_fh},">".$self->{report_filename});
+
+  if ($self->{debug}) {
+    open($self->{debug_fh},">>".$CONFIG{logfile});
+  }
+  if (not $self->{debug_fh}) {
+    print STDERR "Can't open logfile ".$CONFIG{logfile}."\n";
+    print STDERR "Disabling logs\n";
+    $self->{debug} = 0;
+  } else {
+    my $fh = $self->{debug_fh};
+    $fh->autoflush(1);
+  }
+  my $imap_ops = {};
+  $imap_ops->{Server} = $self->{server};
+  $imap_ops->{Port} = $self->{port};
+  $imap_ops->{User} = $self->{user};
+  $imap_ops->{Password} = $self->{pass};
+  $imap_ops->{Peek} = 1;
+  $imap_ops->{Uid} = 1;
+  if ($self->{debug} > 1 ) {
+    $imap_ops->{Debug} = 1;
+    $imap_ops->{Debug_fh} = $self->{debug_fh};
+  }
+  $imap_ops->{Ssl} = 1 if ($self->{ssl} =~ /^ssl$/);
+  $imap_ops->{Tls} = 1 if ($self->{ssl} =~ /^tls$/);
+  $imap_ops->{Ignoresizeerrors} = 1;
+  my $imap =  Mail::IMAPClient->new(%$imap_ops);
+  $self->{imap} = $imap;
+  bless $self, $class;
+  $self->_debug_("IC new: ".$self->{report_filename}." created.");
+  if (! $imap) {
+    $self->_report_("{conectar}.Error durante la conexion con el servidor [".
+      $self->{server}.":".$self->{port}."]"
+    );
+    $self->_report_("    RESPUESTA:$@");
+    $self->_report_("---");
+  }
+  return $self;
+}
+
+# Define la accion a ejecutar sobre los mensajes en el servidor
+# $action =accion por defecto( delete | mark_flagged | mark_seen)
+#   "delete" - borrar los mensajes
+#   "mark_flagged" - marcar con el flag $MDNSent o Flagged
+#   "mark_seen" - marcar como leido
+sub action{
+  my $self = shift;
+  my $action = shift;
+  $self->_debug_("IC action: setting action to $action");
+  $self->{action} = $action if ($action =~ /^(delete|mark_flagged|mark_seen)$/);
+}
+
+sub _build_filter_ {
+  my $self = shift;
+  my $action = $self->{action};
+  return '' if ($action eq '');
+  # la accion define un filtro totalmente inverso
+  # mark_seen - marcar como visto, hace que busque todos los mensajes sin leer unseen
+  # delete - hace que busque directamente todos los mensajes.
+  # mark_flagged - buscar todos los mensajes sin el flag $MDNSent o Flagged
+  my $filter_map = {
+    'mark_seen' => 'UNSEEN',
+    'delete' => 'ALL',
+    'mark_flagged' => 'UNFLAGGED'
+    #'mark_flagged' => 'NOT KEYWORD $MDNSent'
+  };
+  return $filter_map->{$action};
+}
+
+
+sub _post_callback_ {
+  my $self = shift;
+  my $action = $self->{action};
+  return sub {} if ($action eq '');
+  my $callbacks = {
+    'mark_seen' => sub {
+      my $imap = shift;
+      my $msgs = shift;
+      $imap->set_flag("\\Seen", @$msgs);
+    },
+    'delete' => sub {
+      my $imap = shift;
+      my $msgs = shift;
+      $imap->delete_message(@$msgs);
+      $imap->expunge;
+    },
+    'mark_flagged' => sub {
+      my $imap = shift;
+      my $msgs = shift;
+      $imap->set_flag("\\Flagged", @$msgs);
+    }
+  };
+  return $callbacks->{$action};
+}
+
+sub set_domain {
+  my $self = shift;
+  my $domain = shift;
+  $self->_debug_("IC set_domain: domain $domain");
+  $self->{archiving_domain} = $domain;
+}
+
+# Funcion para establecer la carpeta a la cual se quedara "pegado"
+# el conector imap. Por "pegado" se entiende que todas las operaciones se 
+# ejecutaran solo sobre esa carpeta. Todas las demas se saltearan.
+sub stick_to {
+  my $self = shift;
+  my $sfolder = shift;
+  
+  return if (! $self->{imap});
+  
+  if ($sfolder eq '') {
+    $self->{stick_to} = '';
+  } else {
+    @folders = $self->{imap}->folders;
+    foreach my $folder (@folders) {
+      if ($sfolder eq $folder) {
+        $self->_debug_("IC stick_to: sticked to $folder");
+        $self->{stick_to} = $folder;
+      }
+    }
+  }
+}
+
+# Ejecuta la revision de la cuenta imap
+# Revisa todos los mensajes basandose en la accion establecida.
+# Los UIDs de los mensajes que satisfacen el criterio son recolectados en 
+#   la estructura interna.
+# La funcion retorna el nro de mensajes recolectados.
+sub collect{
+  my $self = shift;
+  return if (! $self->{imap});
+  $self->{report_flag} = 0;
+  $self->_debug_("IC collect: scanning folders");
+  my @folders;
+  $self->{collected} = {};
+  my $collected = $self->{collected};
+  my $searched_total = 0;
+  my $search_limit = $CONFIG{'imap_search_limit'};
+  @folders = $self->{imap}->folders;
+  if ($self->{imap}->LastError) {
+    $self->_debug_("IC collect: Error while scan folders ".
+      $self->{imap}->LastError
+    );
+    $self->_report_("{colectar}.Error al obtener el listado de las bandejas");
+    $self->_report_("    ERROR:".$self->{imap}->LastError);
+    $self->_report_("---");
+  }
+  my $filter = $self->_build_filter_;
+  $self->_debug_("IC collect: setting up $filter filter");
+  foreach my $folder (@folders) {
+    if ($self->{stick_to} ne '' && $self->{stick_to} ne $folder) {
+      $self->_debug_("IC collect: skipping $folder, sticked to ".
+        $self->{stick_to});
+      next;
+    }
+    if ($searched_total >= $search_limit) {
+      $self->_debug_("IC collect: skipping $folder, search limit ".
+        "[$search_limit] reached, collected [$searched_total].");
+      next;
+    }
+    $collected->{$folder} = [];
+    $self->_debug_("IC collect: examining $folder");
+    my $res = $self->{imap}->examine($folder);
+    if ($self->{imap}->IsSelected and $res) {
+      my @searched = $self->{imap}->search($filter);
+      # IMAPClient vacia $@ y lo mantiene vacio si todo va bien
+      if (not $@) {
+        # tengo 0 o mas mensajes
+        my $searched_count = scalar @searched;
+        if ($searched_count > 0) {
+          $self->_debug_("IC collect: collected $searched_count message(s)");
+          if (($searched_count + $searched_total) > $search_limit) {
+            # el sobrante
+            my $surplus = $searched_count + $searched_total - $search_limit;
+            my $permited_count = $searched_count - $surplus;
+            $self->_debug_("IC collect: $searched_count+$searched_total ".
+              "exceeds imap search limit [$search_limit], surplus [$surplus]");
+            $self->_debug_("IC collect: taking $permited_count instead of $searched_count");
+            @searched = @searched[0..($permited_count-1)];
+            $searched_count = scalar @searched;
+          }
+          $searched_total = $searched_total + $searched_count;
+          $collected->{$folder} = \(@{$collected->{$folder}} , @searched);
+        }
+      } else {
+        $self->_report_("{colectar}.Error al ejecutar el filtro [$filter] en la bandeja [$folder]");
+        $self->_report_("    ERROR:".$self->{imap}->LastError);
+        $self->_report_("---");
+      }
+    } else {
+      $self->_debug_("IC collect: failed opening $folder. Not in selected state");
+      $self->_report_("{colectar}.Error al examinar la bandeja [$folder]");
+      $self->_report_("    ERROR:".$self->{imap}->LastError);
+      $self->_report_("---");
+    }
+  }
+  $self->{collected_total} = $searched_total;
+  return $searched_total; 
+}
+
+# La funcion es encargada de obtener los mensajes. 
+# Para ejecutarse usa una estructura propia
+# $self->{collected}. Esta estructura tiene que construirse por el 
+# metodo collect
+# Los mensajes seran enviados via SMTP.
+sub send {
+  my $self = shift;
+  my $smtp_status;
+  my $smtp_status_code;
+  my $smtp_errors_count = 0;
+  my $smtp_errors_max = 3;
+  return if (! $self->{imap});
+
+  my $smtp = Net::SMTP->new(
+    Host => $CONFIG{relay_smtp},
+    Port => $CONFIG{relay_port}
+  );
+  if (!$smtp) {
+    $self->_debug_("IC send: ERROR can't connect to smtp server $CONFIG{relay_smtp}:$CONFIG{relay_port}");
+    #TODO: posiblemente habra que enviar el correo a otro lugar si esto ocurre.
+    my $smtp = Net::SMTP->new(
+      Host => $CONFIG{fallback_smtp},
+      Port => $CONFIG{fallback_port}
+    );
+    # no puedo conectarme con el smtp de fallback. Algo esta andando muy mal entonces.
+    if (!$smtp) {
+      print STDERR "Can't connect fallback smtp. Something went really bad.\n";
+    } else {
+      $smtp->mail($CONFIG{contacts}->{ic_internal_mail_from});
+      $smtp->to($CONFIG{contacts}->{errors_to});
+      $smtp->data();
+      $smtp->datasend("From: ".$CONFIG{contacts}->{ic_internal_mail_from}."\n");
+      $smtp->datasend("Subject: Error Connectig to local smtp relay\n");
+      $smtp->datasend("\n");
+      $smtp->datasend("Error while connecting to local smtp relay.\n");
+      $smtp->dataend();
+      $smtp->quit;
+    }
+    return;
+  }
+  $smtp_status = 1;
+  my $abort = 0;
+  if ($self->{collected_total} > 0 ) {
+    $callback = $self->_post_callback_; # accion a ejecutar
+    $self->_debug_("IC send: going to send $self->{collected_total} messages");
+    foreach my $folder (keys $self->{collected}) {
+      last if ($abort);
+      my $res = $self->{imap}->select($folder);
+      if ($self->{imap}->IsSelected and $res) {
+#        my @success_set = ();
+        $self->_debug_("IC send: $folder selected");
+        foreach my $uid (@{$self->{collected}->{$folder}}) {
+          last if ($abort);
+          if ($smtp_status) {
+            my $message_string = $self->{imap}->message_string($uid);
+            if (defined ($message_string)) {
+              $self->_debug_("IC send: uid $uid fetched");
+              # envio del mensaje via smtp
+              $smtp_status = $smtp->mail($CONFIG{contacts}->{ic_mail_from});
+              $smtp_status_code = $smtp->code(); 
+              if ($smtp_status) {   
+                my $rcpt_to = $CONFIG{contacts}->{ic_rcpt_to};
+                $rcpt_to =~ s/::current_domain::/$self->{archiving_domain}/;
+                $smtp_status = $smtp->to($rcpt_to);
+                $smtp_status_code = $smtp->code(); 
+                if ($smtp_status) {
+                  $message_string = $self->_filter_exchange_report_($message_string);
+                  $message_string = $self->_filter_exchange_2010_report_($message_string);
+                  $smtp_status = $smtp->data( ($message_string) );
+                  $smtp_status_code = $smtp->code(); 
+                  # fin del envio smtp
+          
+                  # Codigo si se quiere bajar a disco el mensaje
+                  #my $fh = IO::File->new("> /var/tmp/msgs/$uid");
+                  #print $fh $message_string;
+                  #$fh->close;
+                  if ($smtp_status) {
+#                    push(@success_set, $uid);
+                    $self->_debug_("IC send: calling callback on UID $uid");
+                    $callback->($self->{imap}, [$uid]);
+                  } else {
+                    $self->_debug_("IC send: smtp error during DATA: uid[$uid]");
+                    $self->_report_("{enviar}.Error SMTP en el DATA: uid[$uid]");
+                  }
+                } else {
+                  $self->_debug_("IC send: smtp error during RCPT TO: uid[$uid]");
+                  $self->_report_("{enviar}.Error SMTP en el RCPT TO: uid[$uid]");
+                }   
+              } else {
+                $self->_debug_("IC send: smtp error during MAIL FROM: uid[$uid]");
+                $self->_report_("{enviar}.Error SMTP en el MAIL FROM: uid[$uid]");
+              }        
+            } else {
+              $self->_report_("{enviar}.Error leyendo el mensaje uid [$uid] en la bandeja [$folder]");
+              $self->_report_("    ERROR:".$self->{imap}->LastError);
+              $self->_report_("---");
+            }
+          }
+          if (!$smtp_status) {
+            $smtp->quit;
+            $smtp_errors_count++ if (int($smtp_status_code/100) == 4); #error 4XX
+            if ($smtp_errors_count > $smtp_errors_max) {
+              $self->_debug_("IC send: max tries reached, aborting!");
+              $self->_report_("{enviar}.Maximo de reintentos alcanzado. Abortando el envio!");
+              $abort = 1;
+            } else {
+              $self->_debug_("IC send: reconnecting, last error code was $smtp_status_code");
+              $self->_report_("{enviar}.Error smtp durante el envio. Tratando de reconectar");
+              $self->_report_("{enviar}.Intento, codigo del ultimo error smtp fue $smtp_status_code");
+              $smtp = Net::SMTP->new(
+                Host => $CONFIG{relay_smtp},
+                Port => $CONFIG{relay_port});
+              # Ver si esto es lo que se quiere. seguir si tengo un error de conexion
+              # o fue un error 5XX
+              $smtp_status = 1 if ($smtp);
+              if (int($smtp_status_code/100) == 5) { #error 5XX
+                $smtp_status = 1;
+                $self->_debug_("IC send: WARNING! calling callback on UID $uid with smtp error, code $smtp_status_code");
+                $callback->($self->{imap}, [$uid]);
+              }
+            }
+          }
+        }
+#        $self->_debug_("IC send: calling callback on ".scalar(@success_set)." message(s).");
+#        $callback->($self->{imap}, \@success_set);
+      } else {
+        $self->_report_("{enviar}.Error al seleccionar la bandeja [$folder]");
+        $self->_report_("    ERROR:".$self->{imap}->LastError);
+        $self->_report_("---");
+      }
+    } 
+  }
+  $smtp->quit if ($smtp);
+}
+
+sub DESTROY
+{
+  my $self = shift;
+  $self->_debug_("IC DESTROY: sending disconnect");
+  $self->{imap}->disconnect if ($self->{imap});
+  close($self->{report_fh});
+  if ($self->{report_flag}) {
+    use Net::SMTP;
+    my $smtp = Net::SMTP->new(
+      Host => $CONFIG{relay_smtp},
+      Port => $CONFIG{relay_port}
+    );
+    if (!$smtp) {
+      $self->_debug_("IC DESTROY: ERROR can't connect to smtp server $CONFIG{relay_smtp}:$CONFIG{relay_port}");
+    } else {
+      $self->_debug_("IC DESTROY: sending error report");
+      $smtp->mail($CONFIG{contacts}->{ic_internal_mail_from});
+      $smtp->to($CONFIG{contacts}->{errors_to});
+      $smtp->data();
+      $smtp->datasend("From: ".$CONFIG{contacts}->{ic_internal_mail_from}."\n");
+      $smtp->datasend("Subject: Error report for ".$self->{user}." at ".$self->{server}."\n");
+      $smtp->datasend("\n");
+      open(my $fh ,"<".$self->{report_filename});
+      while (my $line=<$fh>) {
+        $smtp->datasend($line);
+      }
+      $smtp->dataend();
+      $smtp->quit;
+      $self->_debug_("IC DESTROY: sending done.");
+      close($fh);
+    }
+  }
+  unlink($self->{report_filename});
+  close($self->{debug_fh});
+}
+
+1

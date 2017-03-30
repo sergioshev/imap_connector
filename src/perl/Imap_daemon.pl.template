@@ -1,0 +1,210 @@
+# vim:syntax=perl
+#
+#
+
+use threads;
+use threads::shared;
+use strict;
+
+use DBI;
+use lib qw(<%%PERLMODULE_DIR%%>);
+use Imapconnector;
+
+my $imap_workers = <%%IMAP_CONNECTOR_INSTANCES_PER_HOST%%>;
+my $pool_cycle = <%%POOL_CYCLE%%>;
+my $pool_cycle_recheck = <%%POOL_CYCLE_RECHECK%%>;
+my $imap_workers_data = {};
+my $log_fh;
+my $keep_going = 1;
+my $reload_cycle = 3600; # tiempo (segundos) de recarga de datos de los conectores.
+
+sub get_timestamp {
+  my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst)=localtime(time);
+  my $timestamp = sprintf ("%04d-%02d-%02d %02d:%02d:%02d",
+                           $year+1900,$mon+1,$mday,$hour,$min,$sec);
+  return $timestamp;
+}
+
+sub mlog {
+  my $msg = shift;
+  return if (!$log_fh || <%%LOGLEVEL%%> < 1);
+  
+  print $log_fh get_timestamp." D:".$msg."\n";
+}
+
+sub get_imap_workers_data {
+  my $dbh = DBI->connect(
+    'DBI:mysql:<%%MYSQL_PYME_DB_NAME%%>;host=<%%MYSQL_DB_HOST%%>;port=<%%MYSQL_PORT%%>',
+    '<%%MYSQL_DB_USER%%>',
+    '<%%MYSQL_DB_PASSWORD%%>'
+  );
+  return undef if (!$dbh);
+  my $sql = "select m.*, d.dominio from (select * from imap_connector where protocol like 'IMAP' ) as m join dominios d on (m.id_domain = d.id);";
+  my $data = $dbh->selectall_hashref($sql, 'id');
+  for (my $j=0; $j<$imap_workers; $j++) {
+    $imap_workers_data->{$j} = {};
+  }
+  my $worker = 0;
+  my $rows = 0;
+  foreach my $id (keys %$data) {
+    $imap_workers_data->{$worker}->{$id} = $data->{$id};
+    $rows++;
+    $worker = ($worker % $imap_workers) + 1;
+  }
+  return $rows;  
+}
+
+sub imap_worker {
+  my $id = shift;
+  my $tid = threads->tid();
+
+  my $actions = {
+    0 => 'delete',
+    1 => 'mark_seen',
+    2 => 'mark_flagged'
+  };
+
+  my $mech = {
+    0 => 'none',
+    1 => 'ssl',
+    2 => 'tls'
+  };
+
+  $SIG{'KILL'} = sub {
+    mlog("Worker [$id-$tid] kill signal cached, exiting");
+    threads->exit();
+  };
+
+  while (1) {
+    my $start_time = time;
+    my $data = $imap_workers_data->{$id};
+    foreach my $ic_id (keys $data) {
+      my $ic_name = "$id ic=$ic_id";
+      my $server = $data->{$ic_id}->{server};
+      my $port = $data->{$ic_id}->{port};
+      my $user = $data->{$ic_id}->{user};
+      my $pass = $data->{$ic_id}->{password};
+      my $action = $data->{$ic_id}->{post_archived_action};
+      my $folder = $data->{$ic_id}->{folder};
+      my $domain = $data->{$ic_id}->{dominio};
+      my $ssl = $data->{$ic_id}->{ssl};
+      $ssl = $mech->{$ssl};
+      $action = $actions->{$action};
+      mlog("Worker [$id-$tid]. Creating imap connector");
+      mlog("Worker [$id-$tid]. Connector data s:$server ".
+        "p:$port u:$user p:*** cyph:$ssl a:$action f:$folder ".
+        "d:$domain");
+      my $ic = Imapconnector->new(
+        $ic_name,
+        $server,
+        $port,
+        $user,
+        $pass,
+        $ssl
+      );
+      $ic->action($action);
+      $ic->set_domain($domain);
+      $ic->stick_to($folder) if ($folder);
+      my $collected = $ic->collect;
+      $ic->send;
+      undef $ic;
+    }
+    my $run_time = time - $start_time;
+    mlog("Worker [$id-$tid] finished. Available idle time ".($pool_cycle-$run_time));
+    sleep($pool_cycle-$run_time) if ($run_time < $pool_cycle);
+  }
+  return 1;
+}
+
+# retorna true si todos los hilos pararon
+# falso si al menos un hilo corre.
+sub check_all_killed {
+  my $cont = scalar(threads->list(threads::running));
+  return ($cont == 0);
+}
+
+# prueba matar todos los hilos hasta 5 veces
+# retorna true si pudo matar todos, falso si
+# al menos uno se quedo corriendo.
+sub kill_threads {
+  my $all_killed = 0;
+  my $kill_attempt = 1;
+  my $kill_attempts = 5;
+  while (!$all_killed) {
+    mlog("Killing threads, try $kill_attempt / $kill_attempts");
+    foreach my $thr (threads->list(threads::running)) {
+      mlog("Thread tid ".$thr->tid()." is runnig, sending KILL signal");
+      # no detachar al thread principal, tid=0
+      $thr->kill('KILL')->detach() if ($thr->tid() != 0);
+    }
+    sleep(3);
+    $all_killed = check_all_killed();
+    $kill_attempt++;
+    last if ($kill_attempt > $kill_attempts);
+  }
+  return $all_killed;
+}
+
+sub imap_daemon {
+  my $j;
+  for ($j=0 ; $j<$imap_workers ; $j++) {
+    my $thr = threads->create(\&imap_worker, $j);
+    mlog("Worker $j started tid ".$thr->tid());
+  }
+  my $can_sleep = 1;
+  while($keep_going) {
+    if ($can_sleep) {
+      mlog("Seleeping for $reload_cycle sec, until reload data");
+      sleep($reload_cycle);
+      last if (!$keep_going);
+    }
+    $can_sleep = 0;
+    mlog("Trying to reload data from database");
+    my $all_killed = kill_threads();
+    if ($all_killed) {
+      my $res = get_imap_workers_data;
+      if (!defined($res)) {
+        mlog("Can't retrive data from database");
+      } else {
+        mlog("Database data reloaded");
+        for ($j=0 ; $j<$imap_workers ; $j++) {
+          my $thr = threads->create(\&imap_worker, $j);
+          mlog("Worker $j started tid ".$thr->tid());
+        }
+        $can_sleep = 1;
+      }
+    } else {
+      mlog("Can't kill all threads, IC data not reloaded");
+    }
+    if (!$can_sleep) {
+      mlog("Rechek in $pool_cycle_recheck seg");
+      sleep($pool_cycle_recheck);
+    }
+  }
+}
+
+
+$SIG{HUP}  = sub { $keep_going = 0; };
+$SIG{INT}  = sub { $keep_going = 0; };
+$SIG{QUIT} = sub { $keep_going = 0; };
+$SIG{TERM} = sub { $keep_going = 0; };
+
+
+open ($log_fh, ">><%%LOGFILE%%>");
+if ($log_fh) {
+  $log_fh->autoflush(1);
+}
+
+my $res = get_imap_workers_data;
+if (!defined($res)) {
+  print STDERR "Can't retrive data from database\n";
+} else {
+  mlog("Retrived $res imap_connector records");
+  imap_daemon;
+}
+
+mlog("Closing daemon, running threads ".scalar(threads->list(threads::running)));
+kill_threads();
+
+mlog("Closig logfile. Exiting");
+close($log_fh);

@@ -1,0 +1,10 @@
+1. Como se pasa la informacion para las conexiones ssl y tls?
+  si se usa ssl. eso se va ampliar
+
+2. Como se envia el mensaje? un unico mailfrom: y un rcpt to por cada to: del mensaje?
+  mail from es por configuracion. 
+   
+3. puedo asumir que habra una version de exim instalada o tengo que hacer una portable?
+  si puedo asumir esto
+
+4. Que hago si no logro comunicarme con la cola de correos?

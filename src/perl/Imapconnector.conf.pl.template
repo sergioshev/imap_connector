@@ -1,0 +1,36 @@
+# vim:syntax=perl
+%CONFIG = (
+  # nombre del archivo de log
+  logfile => '<%%LOGFILE%%>',
+
+  # 1 para ver solo evetos del conector
+  # 2 ademas ver trafico imap cliente <-> servidor.
+  # 0 deshabilitar logs
+  loglevel => <%%LOGLEVEL%%>,
+
+  relay_smtp => '<%%EXIM_INTERFACE%%>',
+  relay_port => '<%%EXIM_PORT%%>',
+
+  fallback_smtp => '<%%FALLBACK_SMTP%%>',
+  fallback_port => <%%FALLBACK_PORT%%>,
+ 
+  tmp_report_dir => '/var/tmp',
+  tmp_report_file_prefix => 'report_',
+  
+  x_header => '<%%X_BCC_HEADER%%>',
+  
+  imap_search_limit => <%%IMAP_SEARCH_LIMIT%%>,
+
+  contacts => {
+    # conjunto de direcciones a donde reportar los errors 
+    # durante el procesamiento
+    errors_to => '<%%ERRORS_TO%%>',
+    # el MAIL FROM del connector imap
+    ic_mail_from => '<%%IC_MAIL_FROM%%>',
+    # ::current_domain:: es un disernible se reemplazara
+    # por el dominio a nivel codigo
+    ic_rcpt_to => 'relay-to-archiving-<%%IMAP_CONNECTOR_LOCALPART_RCPTTO%%>@::current_domain::',
+    ic_internal_mail_from => '<%%IC_INTERNAL_MAIL_FROM%%>'
+  }
+);
+

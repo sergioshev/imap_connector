@@ -1,0 +1,99 @@
+# === Exim ===
+# Directorio spool de exim
+EXIM_SPOOL_DIR=/opt/exim/spool
+
+# Directorio para los logs de exim
+EXIM_LOG_DIR=/opt/exim/log
+
+# Configuraciones de exim
+EXIM_CONF_DIR=/opt/exim/conf
+
+# Puerto donde se pone a escuchar exim
+EXIM_PORT=2525
+
+EXIM_POSTMASTER = root
+
+EXIM_USER = Debian-exim
+EXIM_GROUP = Debian-exim
+PRIVATE_ZONE = 
+
+MESSAGE_SIZE_LIMIT = 50M
+# Una interface en la que escucha exim.
+# Deberia normalmente estar en 127.0.0.1 para el reenvio
+# del correo, por razones de seguridad. Exim actua como un
+# buffer del correo y asume NO estar expuesto a internet,
+# no hace chequeos de ningun tipo ni validaciones de headers.
+EXIM_INTERFACE = 127.0.0.1
+
+
+# === Archiving ===
+# datos del host del archiving
+IMAP_CONNECTOR_SMTP_HOST = smtp.terminalquequen.com.ar
+IMAP_CONNECTOR_SMTP_PORT = 25
+
+# estos datos se usan por el exim local para autenticarse en el 
+# archiving
+IMAP_CONNECTOR_SMTP_USER = sshevtsov
+LDAP_IMAP_CONNECTOR_SMTP_PASSWORD = xxxxxxxxx
+
+
+# === Imap connector ===
+# smtp alternativo a donde reportar errores si el exim local
+# no esta funcionando.
+FALLBACK_SMTP = smtp.terminalquequen.com.ar
+FALLBACK_PORT = 25
+
+# Direcccion de correo a donde se va enviar tanto el reporte de errores de una 
+# sesion, como el aviso de problemas en forma directa 
+# (perl hace de cliente smtp, sin pasar por el exim local)
+ERRORS_TO = sshevtsov@terminalquequen.com.ar
+
+# Localpart que se usa en el envio del mensaje desde perl hacia el exim local
+IMAP_CONNECTOR_LOCALPART_RCPTTO = sshevtsov
+
+# Mail from que se va usar cunado se entrega el correo al smtp del archiving
+IC_MAIL_FROM = sergioshev@mail.ru
+
+# El mail fom que se usa cuando el correo es enviado directamente desde perl
+# sin pasar por el exim local
+IC_INTERNAL_MAIL_FROM = sergioshev@mail.ru
+
+#datos para configurar el log del conector
+LOGFILE = /var/log/ic.log
+# 0 - sin logs
+# 1 - solo logs del conector
+# 2 - nivel 1 mas los datos del protocolo imap
+LOGLEVEL = 2
+
+# directorio donde instalar el modulo de perl
+PERLMODULE_DIR = /opt/ic/perl
+
+# header que es insertado por cada bcc parseado del reporte del journal
+X_BCC_HEADER = X-Spamina-Bcc
+
+# Maximo de mensajes a tratar despues de un "imap_search"
+# Si la cantidad de mensajes retornados supera ese limite los mensajes
+# restantes se descartan hasta el proximo ciclo de chequeo.
+IMAP_SEARCH_LIMIT = 100
+
+# === Imap daemon ===
+IMAP_CONNECTOR_INSTANCES_PER_HOST = 3
+
+# Tiempo de ejecucion para los hilos.
+# es el timpo de ronda en el cual todos los hilos deben terminar.
+# Tiempo expresado en segundos.
+POOL_CYCLE = 300
+
+# Si los hilos no terminaron dentro de POOL_CYCLE volver a chequear 
+# por fianalizacion despuede POOL_CYCLE_RECHECK
+# Tiempo expresado en segundos
+POOL_CYCLE_RECHECK = 15
+
+
+# === Mysql ===
+MYSQL_DB_HOST = localhost
+MYSQL_PORT = 3306
+MYSQL_DB_USER = root
+MYSQL_DB_PASSWORD = xxxxxx
+MYSQL_PYME_DB_NAME = ic
+

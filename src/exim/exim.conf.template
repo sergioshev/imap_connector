@@ -1,0 +1,187 @@
+CONFDIR = <%%EXIM_CONF_DIR%%>
+
+exim_path = <%%EXIM_CONF_DIR%%>/exim4
+log_file_path = <%%EXIM_LOG_DIR%%>/%slog 
+
+domainlist local_domains = unqualified.priv
+domainlist relay_to_domains =
+hostlist relay_from_hosts = localhost:127.0.0.1
+
+# Message size limit. The default (used when MESSAGE_SIZE_LIMIT
+# is unset) is 50 MB
+message_size_limit = <%%MESSAGE_SIZE_LIMIT%%>
+
+smtp_accept_max = 20
+smtp_accept_max_per_host = 100
+#smtp_accept_max_per_connection = 200
+smtp_accept_queue_per_connection = 250
+
+local_interfaces = <%%EXIM_INTERFACE%%>
+daemon_smtp_ports = <%%EXIM_PORT%%>
+
+LOCAL_DELIVERY=mail_spool
+log_selector = +outgoing_port +address_rewrite +received_recipients +received_sender \
+  +subject +tls_peerdn
+
+acl_smtp_mail = acl_check_mail
+acl_smtp_rcpt = acl_check_rcpt
+
+host_lookup = *
+
+MAIN_IGNORE_BOUNCE_ERRORS_AFTER = 2d
+ignore_bounce_errors_after = MAIN_IGNORE_BOUNCE_ERRORS_AFTER
+
+MAIN_TIMEOUT_FROZEN_AFTER = 7d
+timeout_frozen_after = MAIN_TIMEOUT_FROZEN_AFTER
+
+MAIN_FREEZE_TELL = <%%EXIM_POSTMASTER%%>
+freeze_tell = MAIN_FREEZE_TELL
+
+spool_directory = <%%EXIM_SPOOL_DIR%%>
+
+smtp_banner = Imap connector relay. Exim $version_number $tod_full
+
+MAIN_TLS_ADVERTISE_HOSTS = *
+tls_advertise_hosts = MAIN_TLS_ADVERTISE_HOSTS
+
+
+MAIN_TLS_CERTIFICATE = CONFDIR/exim.crt
+tls_certificate = MAIN_TLS_CERTIFICATE
+
+MAIN_TLS_PRIVATEKEY = CONFDIR/exim.key
+tls_privatekey = MAIN_TLS_PRIVATEKEY
+
+MAIN_TLS_VERIFY_CERTIFICATES = ${if exists{/etc/ssl/certs/ca-certificates.crt}\
+                                    {/etc/ssl/certs/ca-certificates.crt}\
+				    {/dev/null}}
+tls_verify_certificates = MAIN_TLS_VERIFY_CERTIFICATES
+
+
+MAIN_TLS_VERIFY_HOSTS =
+tls_verify_hosts = MAIN_TLS_VERIFY_HOSTS
+
+MAIN_TLS_TRY_VERIFY_HOSTS = *
+tls_try_verify_hosts = MAIN_TLS_TRY_VERIFY_HOSTS
+
+
+begin acl
+
+acl_check_mail:
+  deny
+    message = no HELO given before MAIL command
+    condition = ${if def:sender_helo_name {no}{yes}}
+
+  accept
+
+acl_check_rcpt:
+
+  accept
+
+acl_check_data:
+
+  accept
+
+begin routers
+
+relay_to_archiving:
+  debug_print = "R: relay_to_archiving for $local_part@$domain"
+  #driver = dnslookup
+  local_part_prefix = relay-to-archiving-
+  driver = accept
+  transport = deliver_to_archiver
+  errors_to = <%%ERRORS_TO%%>
+  no_more
+
+dnslookup:
+  debug_print = "R: dnslookup for $local_part@$domain"
+  driver = dnslookup
+  domains = ! +local_domains
+  transport = remote_smtp
+  same_domain_copy_routing = yes
+  # ignore private rfc1918 and APIPA addresses
+  ignore_target_hosts = 0.0.0.0 : 127.0.0.0/8 : 192.168.0.0/16 :\
+                        172.16.0.0/12 : 10.0.0.0/8 : 169.254.0.0/16 :\
+			255.255.255.255
+  no_more
+
+
+begin transports
+
+deliver_to_archiver:
+  debug_print = "T: deliver_to_archiver for $local_part@$domain"
+  driver = smtp
+  hosts_override = true
+  hosts = <%%IMAP_CONNECTOR_SMTP_HOST%%>.<%%PRIVATE_ZONE%%>
+  port = <%%IMAP_CONNECTOR_SMTP_PORT%%>
+  hosts_require_auth = *
+  # Workaround porque falla aleatoreamente la autenticación si se utiliza TLS
+  hosts_avoid_tls = <%%IMAP_CONNECTOR_SMTP_HOST%%>.<%%PRIVATE_ZONE%%> 
+
+
+
+remote_smtp:
+  debug_print = "T: remote_smtp for $local_part@$domain"
+  driver = smtp
+
+
+begin retry
+
+
+# Address or Domain    Error       Retries
+# -----------------    -----       -------
+
+*                      *           F,2h,15m; G,16h,1h,1.5; F,4d,6h
+
+begin rewrite
+
+
+begin authenticators
+
+cram_md5:
+  driver = cram_md5
+  public_name = CRAM-MD5
+  client_name = ${extract{1}{:}{${lookup{$host}nwildlsearch{CONFDIR/passwd.client}{$value}fail}}}
+  client_secret = ${extract{2}{:}{${lookup{$host}nwildlsearch{CONFDIR/passwd.client}{$value}fail}}}
+
+# this returns the matching line from passwd.client and doubles all ^
+PASSWDLINE=${sg{\
+                ${lookup{$host}nwildlsearch{CONFDIR/passwd.client}{$value}fail}\
+	        }\
+	        {\\N[\\^]\\N}\
+	        {^^}\
+	    }
+
+plain:
+  driver = plaintext
+  public_name = PLAIN
+.ifndef AUTH_CLIENT_ALLOW_NOTLS_PASSWORDS
+  client_send = "<; ${if !eq{$tls_cipher}{}\
+                    {^${extract{1}{:}{PASSWDLINE}}\
+		     ^${sg{PASSWDLINE}{\\N([^:]+:)(.*)\\N}{\\$2}}\
+		   }fail}"
+.else
+  client_send = "<; ^${extract{1}{:}{PASSWDLINE}}\
+		    ^${sg{PASSWDLINE}{\\N([^:]+:)(.*)\\N}{\\$2}}"
+.endif
+
+login:
+  driver = plaintext
+  public_name = LOGIN
+.ifndef AUTH_CLIENT_ALLOW_NOTLS_PASSWORDS
+  # Return empty string if not non-TLS AND looking up $host in passwd-file
+  # yields a non-empty string; fail otherwise.
+  client_send = "<; ${if and{\
+                          {!eq{$tls_cipher}{}}\
+                          {!eq{PASSWDLINE}{}}\
+                         }\
+                      {}fail}\
+                 ; ${extract{1}{::}{PASSWDLINE}}\
+		 ; ${sg{PASSWDLINE}{\\N([^:]+:)(.*)\\N}{\\$2}}"
+.else
+  # Return empty string if looking up $host in passwd-file yields a
+  # non-empty string; fail otherwise.
+  client_send = "<; ${if !eq{PASSWDLINE}{}\
+                      {}fail}\
+                 ; ${extract{1}{::}{PASSWDLINE}}\
+		 ; ${sg{PASSWDLINE}{\\N([^:]+:)(.*)\\N}{\\$2}}"
+.endif
